@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<title>Prévision production solaire (Open-Meteo)</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+
+<style>
+body {
+    font-family: Arial, sans-serif;
+    background: #f4f6f8;
+    padding: 20px;
+}
+h1 {
+    text-align: center;
+}
+.param {
+    background: #fff;
+    padding: 12px;
+    margin-bottom: 15px;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+}
+.param input, .param button {
+    margin: 4px;
+    padding: 6px;
+    font-size: 14px;
+}
+#map {
+    height: 400px;
+    margin-top: 10px;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+}
+table {
+    border-collapse: collapse;
+    width: 100%;
+    background: #fff;
+    margin-top: 20px;
+}
+th, td {
+    border: 1px solid #ccc;
+    padding: 6px;
+    text-align: center;
+    font-size: 14px;
+}
+th {
+    background: #eee;
+}
+.good { background: #c8f7c5; }
+.medium { background: #fff3b0; }
+.bad { background: #f7c5c5; }
+</style>
+</head>
+
+<body>
+
+<h1>☀️ Prévision de production solaire (5 jours)</h1>
+
+<div class="param">
+    <label>Localité :</label>
+    <input id="localite" type="text" value="Lille" placeholder="Ex: Lille">
+    <button onclick="chercherLocalite()">Chercher</button>
+    <br>
+
+    <label>Latitude :</label>
+    <input id="latitude" type="number" step="0.000001" value="50.66">
+
+    <label>Longitude :</label>
+    <input id="longitude" type="number" step="0.000001" value="3.22">
+
+    <label>Surface PV (m²) :</label>
+    <input id="surfacePV" type="number" step="0.1" value="10">
+
+    <label>Rendement :</label>
+    <input id="rendement" type="number" step="0.001" value="0.285">
+
+    <button onclick="calcul()">Calculer</button>
+
+    <div id="map"></div>
+</div>
+
+<table id="table">
+    <thead>
+        <tr id="header">
+            <th>Date</th>
+            <th>🌅 Lever</th>
+            <th>🌇 Coucher</th>
+            <th>Énergie jour (Wh)</th>
+        </tr>
+    </thead>
+    <tbody></tbody>
+</table>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script>
+let map = L.map('map').setView([50.66, 3.22], 10);
+let marker = L.marker([50.66, 3.22]).addTo(map);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+}).addTo(map);
+
+// clic sur carte => remplit latitude/longitude
+map.on('click', function(e) {
+    const lat = e.latlng.lat.toFixed(6);
+    const lon = e.latlng.lng.toFixed(6);
+
+    document.getElementById("latitude").value = lat;
+    document.getElementById("longitude").value = lon;
+
+    marker.setLatLng(e.latlng);
+
+    calcul();
+});
+
+// recherche d'une localité via Nominatim
+function chercherLocalite() {
+    const lieu = document.getElementById("localite").value.trim();
+    if (!lieu) return;
+
+    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(lieu)}`;
+
+    fetch(url)
+    .then(r => r.json())
+    .then(data => {
+        if (!data.length) {
+            alert("Localité non trouvée");
+            return;
+        }
+
+        const lat = parseFloat(data[0].lat);
+        const lon = parseFloat(data[0].lon);
+
+        document.getElementById("latitude").value = lat.toFixed(6);
+        document.getElementById("longitude").value = lon.toFixed(6);
+
+        map.setView([lat, lon], 12);
+        marker.setLatLng([lat, lon]);
+
+        calcul();
+    })
+    .catch(err => {
+        console.error(err);
+        alert("Erreur lors de la recherche de la localité");
+    });
+}
+
+function calcul() {
+    const latitude = parseFloat(document.getElementById("latitude").value);
+    const longitude = parseFloat(document.getElementById("longitude").value);
+    const surfacePV = parseFloat(document.getElementById("surfacePV").value);
+    const rendement = parseFloat(document.getElementById("rendement").value);
+
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&hourly=shortwave_radiation&daily=sunrise,sunset&forecast_days=5&timezone=Europe/Paris`;
+
+    fetch(url)
+    .then(r => r.json())
+    .then(data => {
+        const tbody = document.querySelector("#table tbody");
+        const header = document.getElementById("header");
+
+        tbody.innerHTML = "";
+        header.innerHTML = `
+            <th>Date</th>
+            <th>🌅 Lever</th>
+            <th>🌇 Coucher</th>
+            <th>Énergie jour (Wh)</th>
+        `;
+
+        const times = data.hourly.time;
+        const rad   = data.hourly.shortwave_radiation;
+        const sunrises = data.daily.sunrise;
+        const sunsets  = data.daily.sunset;
+
+        const jours = {};
+        const heuresGlobales = new Set();
+
+        times.forEach((t, i) => {
+            if (rad[i] <= 0) return;
+
+            const d = new Date(t);
+            const h = d.getHours();
+            const date = t.slice(0,10);
+
+            heuresGlobales.add(h);
+
+            if (!jours[date]) jours[date] = {};
+            jours[date][h] = rad[i];
+        });
+
+        const heures = [...heuresGlobales].sort((a,b)=>a-b);
+
+        heures.forEach(h => {
+            const th = document.createElement("th");
+            th.textContent = h + "h";
+            header.insertBefore(th, header.lastElementChild);
+        });
+
+        Object.keys(jours).forEach((date, index) => {
+            let tr = document.createElement("tr");
+            let energieJour = 0;
+
+            const lever = sunrises[index]?.slice(11,16) || "--:--";
+            const coucher = sunsets[index]?.slice(11,16) || "--:--";
+
+            tr.innerHTML = `
+                <td><b>${date}</b></td>
+                <td>${lever}</td>
+                <td>${coucher}</td>
+            `;
+
+            heures.forEach(h => {
+                const r = jours[date][h] || 0;
+                const prodWh = r * surfacePV * rendement;
+                energieJour += prodWh;
+
+                let cls = "bad";
+                if (r > 400) cls = "good";
+                else if (r > 150) cls = "medium";
+
+                tr.innerHTML += `
+                    <td class="${cls}">
+                        ${Math.round(prodWh)} Wh
+                    </td>
+                `;
+            });
+
+            tr.innerHTML += `<td><b>${Math.round(energieJour)} Wh</b></td>`;
+            tbody.appendChild(tr);
+        });
+    })
+    .catch(err => {
+        console.error(err);
+        alert("❌ Erreur Open-Meteo");
+    });
+}
+
+// lancement initial
+calcul();
+</script>
+
+</body>
+</html>
